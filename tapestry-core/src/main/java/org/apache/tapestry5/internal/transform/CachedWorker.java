@@ -87,30 +87,34 @@ public class CachedWorker implements ComponentClassTransformWorker2
     };
 
     /**
-     * Handles the watching of a binding (usually a property or property expression), invalidating the
-     * cache early if the watched binding's value changes.
+     * Handles the watching of bindings (usually comma separated properties or property expressions),
+     * invalidating the cache early if the watched binding's value changes.
      */
     private class WatchedBindingMethodResultCache extends SimpleMethodResultCache
     {
-        private final Binding binding;
+        private final Binding[] bindings;
 
-        private Object cachedBindingValue;
+        private Object[] cachedBindingValues;
 
-        public WatchedBindingMethodResultCache(Binding binding)
+        public WatchedBindingMethodResultCache(Binding[] bindings)
         {
-            this.binding = binding;
+            this.bindings = bindings;
         }
 
         @Override
         public boolean isCached()
         {
-            Object currentBindingValue = binding.get();
+            for (int i = 0; i < bindings.length; i++) {
+                Object currentBindingValue = bindings[i].get();
 
-            if (!TapestryInternalUtils.isEqual(cachedBindingValue, currentBindingValue))
-            {
-                reset();
+                if (!TapestryInternalUtils.isEqual(cachedBindingValues[i], currentBindingValue))
+                {
+                    reset();
 
-                cachedBindingValue = currentBindingValue;
+                    cachedBindingValues[i] = currentBindingValue;
+
+                    break;
+                }
             }
 
             return super.isCached();
@@ -223,11 +227,16 @@ public class CachedWorker implements ComponentClassTransformWorker2
 
         // Because of the watch, its necessary to create a factory for instances of this component and method.
 
-        final FieldHandle bindingFieldHandle = plasticClass.introduceField(Binding.class, "cache$watchBinding$" + method.getDescription().methodName).getHandle();
+        final String[] watches = watch.split(",");
 
+        final FieldHandle[] bindingFieldHandles = new FieldHandle[watches.length];
 
-        // Each component instance will get its own Binding instance. That handles both different locales,
-        // and reuse of a component (with a cached method) within a page or across pages. However, the binding can't be initialized
+        for (String eachWatch : watches) {
+            plasticClass.introduceField(Binding.class, "cache$watchBinding$" + watch + "$" + method.getDescription().methodName).getHandle();
+        }
+
+        // Each component instance will get its own Binding instances. That handles both different locales,
+        // and reuse of a component (with a cached method) within a page or across pages. However, the bindings can't be initialized
         // until the page loads.
 
         plasticClass.introduceInterface(PageLifecycleListener.class);
@@ -237,10 +246,12 @@ public class CachedWorker implements ComponentClassTransformWorker2
             {
                 ComponentResources resources = invocation.getInstanceContext().get(ComponentResources.class);
 
-                Binding binding = bindingSource.newBinding("@Cached watch", resources,
-                        BindingConstants.PROP, watch);
+                for (int i = 0; i < watches.length; i++) {
+                    Binding binding = bindingSource.newBinding("@Cached watch " + watch, resources,
+                            BindingConstants.PROP, watch);
 
-                bindingFieldHandle.set(invocation.getInstance(), binding);
+                    bindingFieldHandles[i].set(invocation.getInstance(), binding);
+                }
 
                 invocation.proceed();
             }
@@ -250,9 +261,13 @@ public class CachedWorker implements ComponentClassTransformWorker2
         {
             public MethodResultCache create(Object instance)
             {
-                Binding binding = (Binding) bindingFieldHandle.get(instance);
+                final Binding[] bindings = new Binding[watches.length];
 
-                return new WatchedBindingMethodResultCache(binding);
+                for (int i = 0; i < watches.length; i++) {
+                    bindings[i] = (Binding) bindingFieldHandles[i].get(instance);
+                }
+
+                return new WatchedBindingMethodResultCache(bindings);
             }
         };
     }
